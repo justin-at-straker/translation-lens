@@ -1,6 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500&family=JetBrains+Mono:wght@500&display=swap");
 
 :root {
+  /* The app is designed light-only. ui-sdk's web.css opts into light dark and
+     picks text colours with light-dark(), which gave near-white text on our
+     white panels when the OS is in dark mode. */
+  color-scheme: light;
   --paper: #f3f1ec;
   --paper-lens: #eef1fb;
   --ink: #1b1b1a;
@@ -81,8 +85,8 @@ html, body, #root { margin: 0; height: 100%; background: var(--desk); }
 .row-agent .agent-tag { margin-left: 10px; }
 
 .select-trigger { display: flex; justify-content: space-between; align-items: center; width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; font-size: 14px; color: var(--ink); cursor: pointer; }
-.select-content { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 12px 30px rgba(20, 24, 40, 0.14); min-width: 260px; }
-.select-item { padding: 8px 10px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+.select-content { color-scheme: light; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 12px 30px rgba(20, 24, 40, 0.14); min-width: 260px; }
+.select-item { color: var(--ink); padding: 8px 10px; border-radius: 6px; font-size: 14px; cursor: pointer; }
 .select-item[data-highlighted] { background: var(--accent-soft); }
 .select-item[aria-selected="true"] { font-weight: 600; }
 
