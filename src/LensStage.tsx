@@ -13,6 +13,8 @@ import { Page } from "./Page"
 import type { LensSettings } from "./settings"
 
 export const PAGE_WIDTH = 960
+/** Desk around the page in the WebGL renderer, so the loupe can hang off the edge. */
+const DESK_MARGIN = 200
 
 type Canvas2D = CanvasRenderingContext2D & {
   drawElementImage?: (el: Element, dx: number, dy: number, dw: number, dh: number) => DOMMatrix | undefined
@@ -73,8 +75,9 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
   }, [translated, renderer])
 
   // ---- Canvas renderer -------------------------------------------------
-  const stateRef = useRef({ lens, settings, busy, height })
-  stateRef.current = { lens, settings, busy, height }
+  const M = renderer === "webgl" ? DESK_MARGIN : 0
+  const stateRef = useRef({ lens, settings, busy, height, M })
+  stateRef.current = { lens, settings, busy, height, M }
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current
@@ -231,24 +234,24 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     const en = enRef.current
     const tr = trRef.current
     if (!g || !canvas || !en || !tr) return
-    const { lens: L, settings: s, busy: b } = stateRef.current
+    const { lens: L, settings: s, busy: b, M: margin } = stateRef.current
     // The lamp hangs 700px out from the middle of what's on screen, 650px up,
     // so scrolling and moving the loupe both change how the light falls.
     const wrap = wrapRef.current
     const vp = wrap?.closest(".viewport") as HTMLElement | null
-    const midY = vp && wrap ? vp.scrollTop + vp.clientHeight / 2 - wrap.offsetTop : 400
+    const midY = vp && wrap ? vp.scrollTop + vp.clientHeight / 2 - wrap.offsetTop - margin : 400
     const a = (s.lightAngle * Math.PI) / 180
     const lamp = { x: PAGE_WIDTH / 2 + Math.cos(a) * 700, y: midY + Math.sin(a) * 700, z: 650 }
-    g.draw({ lens: L, lamp, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
+    g.draw({ lens: L, lamp, margin, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
     // WebGL can't infer where elements were drawn, so tell the canvas: the
     // English page sits as-is; the translated page is scaled about the lens
     // centre and only takes clicks inside the lens.
     const m = s.magnify
     const R = s.size
     try {
-      canvas.updateElementGeometry?.(en, { canvasTransform: new DOMMatrix() })
+      canvas.updateElementGeometry?.(en, { canvasTransform: new DOMMatrix([1, 0, 0, 1, margin, margin]) })
       canvas.updateElementGeometry?.(tr, {
-        canvasTransform: new DOMMatrix([m, 0, 0, m, L.x * (1 - m), L.y * (1 - m)]),
+        canvasTransform: new DOMMatrix([m, 0, 0, m, margin + L.x * (1 - m), margin + L.y * (1 - m)]),
         canvasClip: { x: L.x - R / m, y: L.y - R / m, width: (2 * R) / m, height: (2 * R) / m },
       })
     } catch {
@@ -287,8 +290,8 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     const canvas = canvasRef.current
     if (!canvas) return
     const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round(PAGE_WIDTH * dpr)
-    canvas.height = Math.round(height * dpr)
+    canvas.width = Math.round((PAGE_WIDTH + 2 * DESK_MARGIN) * dpr)
+    canvas.height = Math.round((height + 2 * DESK_MARGIN) * dpr)
     canvas.requestPaint?.()
   }, [renderer, height])
 
@@ -324,7 +327,7 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
 
   const onPointerMove = (e: React.PointerEvent) => {
     const rect = wrapRef.current!.getBoundingClientRect()
-    setLens({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    setLens({ x: e.clientX - rect.left - M, y: e.clientY - rect.top - M })
   }
 
   const R = settings.size
@@ -332,7 +335,12 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
 
   if (renderer !== "css") {
     return (
-      <div ref={wrapRef} className="stage" onPointerMove={onPointerMove} style={{ width: PAGE_WIDTH, height }}>
+      <div
+        ref={wrapRef}
+        className={M ? "stage stage-free" : "stage"}
+        onPointerMove={onPointerMove}
+        style={{ width: PAGE_WIDTH + 2 * M, height: height + 2 * M, margin: `${-M}px 0 ${-M}px max(${-M}px, calc((100% - ${PAGE_WIDTH}px) / 2 - ${M}px))` }}
+      >
         <canvas
           // A canvas holds one context type: remount when switching 2D <-> WebGL.
           key={renderer}
@@ -340,12 +348,12 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
           className="stage-canvas"
           // Both spellings: the shipped origin trial and the current explainer.
           {...{ layoutsubtree: "", content: "drawable" }}
-          style={{ width: PAGE_WIDTH, height }}
+          style={{ width: PAGE_WIDTH + 2 * M, height: height + 2 * M }}
         >
-          <div ref={enRef} {...{ drawable: "" }}>
+          <div ref={enRef} style={{ width: PAGE_WIDTH }} {...{ drawable: "" }}>
             <Page t={ENGLISH} lang="en" />
           </div>
-          <div ref={trRef} {...{ drawable: "" }}>
+          <div ref={trRef} style={{ width: PAGE_WIDTH }} {...{ drawable: "" }}>
             <Page t={translated} lang={lang} variant="lens" hidden />
           </div>
         </canvas>

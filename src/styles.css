@@ -19,7 +19,7 @@ html, body, #root { margin: 0; height: 100%; background: var(--desk); }
 * { box-sizing: border-box; }
 
 .app { display: flex; height: 100%; }
-.viewport { flex: 1; min-width: 0; overflow: auto; padding: 32px; }
+.viewport { flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 32px; }
 .sidebar {
   width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px;
   padding: 20px; overflow-y: auto; border-left: 1px solid var(--line); background: #ece9e2;
@@ -28,6 +28,8 @@ html, body, #root { margin: 0; height: 100%; background: var(--desk); }
 /* Stage */
 .stage { position: relative; margin: 0 auto; cursor: none; border-radius: 10px; box-shadow: 0 1px 0 var(--line), 0 20px 50px rgba(20, 24, 40, 0.12); overflow: hidden; }
 .stage-canvas { display: block; }
+/* WebGL: the shader draws the page shadow and the desk, so the loupe can overhang the page. */
+.stage-free { box-shadow: none; border-radius: 0; overflow: visible; }
 .lens-css { position: absolute; left: 0; top: 0; width: 960px; pointer-events: none; }
 .lens-rim {
   position: absolute; border-radius: 50%; pointer-events: none;

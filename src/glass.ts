@@ -25,6 +25,8 @@ export type GlassState = {
   lens: { x: number; y: number }
   /** Lamp position in page CSS px; z is its height above the page. */
   lamp: { x: number; y: number; z: number }
+  /** Desk margin around the page in CSS px; the canvas is this much larger on each side. */
+  margin: number
   radius: number
   magnify: number
   refraction: boolean
@@ -47,15 +49,36 @@ uniform vec2 uTrSize;
 uniform vec2 uL;        // lens centre, CSS px
 uniform vec3 uLamp;     // lamp position, CSS px (z = height above the page)
 uniform float uR, uM, uRefr, uTime, uBusy;
+uniform float uMargin;  // desk around the page, CSS px, so the loupe can overhang
 out vec4 outColor;
+
+const vec3 DESK = vec3(0.894, 0.882, 0.851);
 
 // Heights above the page, CSS px.
 const float Z_GLASS = 34.0;
 const float Z_HANDLE = 26.0;
 const vec3 V = vec3(0.0, 0.0, 1.0); // orthographic viewer, looking down
 
-vec3 en(vec2 p) { return texture(uEn, p / uEnSize).rgb; }
-vec3 tr(vec2 p) { return texture(uTr, clamp(p / uTrSize, 0.0, 1.0)).rgb; }
+float sdBox(vec2 p, vec2 hs, float r) {
+  vec2 q = abs(p) - hs + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// The desk around the page, with the page's own soft shadow.
+vec3 desk(vec2 p) {
+  float sd = sdBox(p - uEnSize * 0.5 - vec2(0.0, 10.0), uEnSize * 0.5, 10.0);
+  return DESK * (1.0 - 0.14 * exp(-max(sd, 0.0) / 22.0));
+}
+
+// A page sampled at p (page CSS px), or the desk when p is off the page.
+vec3 onPage(sampler2D tex, vec2 size, vec2 p) {
+  float sd = sdBox(p - uEnSize * 0.5, uEnSize * 0.5, 10.0);
+  vec3 c = texture(tex, clamp(p / size, 0.0, 1.0)).rgb;
+  return mix(c, desk(p), smoothstep(-0.5, 0.5, sd));
+}
+
+vec3 en(vec2 p) { return onPage(uEn, uEnSize, p); }
+vec3 tr(vec2 p) { return onPage(uTr, uTrSize, p); }
 
 float sdSeg(vec2 p, vec2 a, vec2 b, out float h) {
   vec2 pa = p - a, ba = b - a;
@@ -96,7 +119,7 @@ vec3 brushedMetal(vec3 n, vec3 T, vec3 l, vec3 tint, float brush) {
 }
 
 void main() {
-  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr;
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr - uMargin;
   vec2 d = p - uL;
   float dist = length(d);
   float aa = 0.8;
@@ -236,7 +259,7 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string) {
   return s
 }
 
-const UNIFORMS = ["uEn", "uTr", "uRes", "uDpr", "uEnSize", "uTrSize", "uL", "uLamp", "uR", "uM", "uRefr", "uTime", "uBusy"]
+const UNIFORMS = ["uEn", "uTr", "uRes", "uDpr", "uEnSize", "uTrSize", "uL", "uLamp", "uR", "uM", "uRefr", "uTime", "uBusy", "uMargin"]
 
 export class GlassRenderer {
   private gl: GLWithElements
@@ -321,6 +344,7 @@ export class GlassRenderer {
     gl.uniform2f(this.u.uEnSize, en.offsetWidth, en.offsetHeight)
     gl.uniform2f(this.u.uTrSize, tr.offsetWidth, tr.offsetHeight)
     gl.uniform2f(this.u.uL, s.lens.x, s.lens.y)
+    gl.uniform1f(this.u.uMargin, s.margin)
     gl.uniform3f(this.u.uLamp, s.lamp.x, s.lamp.y, s.lamp.z)
     gl.uniform1f(this.u.uR, s.radius)
     gl.uniform1f(this.u.uM, s.magnify)
