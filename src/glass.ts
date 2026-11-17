@@ -266,6 +266,8 @@ export class GlassRenderer {
   private prog: WebGLProgram
   private tex: { en: WebGLTexture; tr: WebGLTexture }
   private texSize = { en: [0, 0], tr: [0, 0] }
+  /** CSS size of each page when its texture was captured, so sampling matches the texture. */
+  private cssSize = { en: [1, 1], tr: [1, 1] }
   private u: Record<string, WebGLUniformLocation | null> = {}
   private canvas: DrawableCanvas
 
@@ -306,7 +308,16 @@ export class GlassRenderer {
     return t
   }
 
-  /** Snapshot a drawable child into its texture. Returns false if no snapshot yet. */
+  /**
+   * Snapshot a drawable child into its texture. Returns false if the snapshot
+   * isn't ready, in which case the previous texture is kept so we never draw
+   * a blank (black) page.
+   *
+   * When the element's size changes (a new translation re-aligns the blocks),
+   * the upload goes into a fresh texture that only replaces the old one once
+   * the copy succeeds: reallocating in place would blank the old texture, and
+   * the snapshot can lag a frame behind the new layout.
+   */
   upload(which: "en" | "tr", el: HTMLElement): boolean {
     const gl = this.gl
     const size = this.canvas.getElementImageDefaultSize?.(el) ?? {
@@ -316,21 +327,41 @@ export class GlassRenderer {
     const w = Math.max(1, Math.round(size.width))
     const h = Math.max(1, Math.round(size.height))
     gl.activeTexture(which === "en" ? gl.TEXTURE0 : gl.TEXTURE1)
-    gl.bindTexture(gl.TEXTURE_2D, this.tex[which])
     const [cw, ch] = this.texSize[which]
-    if (cw !== w || ch !== h) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
-      this.texSize[which] = [w, h]
+    const resize = cw !== w || ch !== h
+    const target = resize ? this.makeTexture() : this.tex[which]
+    gl.bindTexture(gl.TEXTURE_2D, target)
+    if (resize) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    while (gl.getError() !== gl.NO_ERROR) {
+      /* clear stale errors so the check below is about this copy */
     }
+    let ok = true
     try {
       gl.texElementSubImage2D!(gl.TEXTURE_2D, 0, 0, 0, el)
-      return true
+      if (gl.getError() !== gl.NO_ERROR) ok = false
     } catch {
-      return false
+      ok = false
     }
+    if (resize) {
+      if (ok) {
+        gl.deleteTexture(this.tex[which])
+        this.tex[which] = target
+        this.texSize[which] = [w, h]
+      } else {
+        gl.deleteTexture(target)
+      }
+    }
+    if (ok) this.cssSize[which] = [el.offsetWidth, el.offsetHeight]
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[which])
+    return ok
   }
 
-  draw(s: GlassState, en: HTMLElement, tr: HTMLElement) {
+  /** True once both pages have been captured at least once. */
+  get ready() {
+    return this.texSize.en[0] > 0 && this.texSize.tr[0] > 0
+  }
+
+  draw(s: GlassState) {
     const gl = this.gl
     const c = this.canvas
     gl.viewport(0, 0, c.width, c.height)
@@ -341,8 +372,8 @@ export class GlassRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.tex.tr)
     gl.uniform2f(this.u.uRes, c.width, c.height)
     gl.uniform1f(this.u.uDpr, c.width / c.clientWidth || devicePixelRatio)
-    gl.uniform2f(this.u.uEnSize, en.offsetWidth, en.offsetHeight)
-    gl.uniform2f(this.u.uTrSize, tr.offsetWidth, tr.offsetHeight)
+    gl.uniform2f(this.u.uEnSize, this.cssSize.en[0], this.cssSize.en[1])
+    gl.uniform2f(this.u.uTrSize, this.cssSize.tr[0], this.cssSize.tr[1])
     gl.uniform2f(this.u.uL, s.lens.x, s.lens.y)
     gl.uniform1f(this.u.uMargin, s.margin)
     gl.uniform3f(this.u.uLamp, s.lamp.x, s.lamp.y, s.lamp.z)

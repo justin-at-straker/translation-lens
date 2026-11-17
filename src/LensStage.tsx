@@ -227,13 +227,15 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
 
   // ---- WebGL glass renderer ---------------------------------------------
   const glassRef = useRef<GlassRenderer | null>(null)
+  const [glEpoch, setGlEpoch] = useState(0)
 
   const drawGlass = useCallback(() => {
     const g = glassRef.current
     const canvas = canvasRef.current
     const en = enRef.current
     const tr = trRef.current
-    if (!g || !canvas || !en || !tr) return
+    // Never draw before both pages have been captured: that would be black.
+    if (!g || !canvas || !en || !tr || !g.ready) return
     const { lens: L, settings: s, busy: b, M: margin } = stateRef.current
     // The lamp hangs 700px out from the middle of what's on screen, 650px up,
     // so scrolling and moving the loupe both change how the light falls.
@@ -242,7 +244,7 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     const midY = vp && wrap ? vp.scrollTop + vp.clientHeight / 2 - wrap.offsetTop - margin : 400
     const a = (s.lightAngle * Math.PI) / 180
     const lamp = { x: PAGE_WIDTH / 2 + Math.cos(a) * 700, y: midY + Math.sin(a) * 700, z: 650 }
-    g.draw({ lens: L, lamp, margin, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
+    g.draw({ lens: L, lamp, margin, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b })
     // WebGL can't infer where elements were drawn, so tell the canvas: the
     // English page sits as-is; the translated page is scaled about the lens
     // centre and only takes clicks inside the lens.
@@ -273,17 +275,34 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       return
     }
     glassRef.current = g
-    // The paint event fires when either page's rendering changes: re-snapshot both.
+    // The paint event fires when either page's rendering changes: re-snapshot
+    // both. A snapshot can lag a frame behind a layout change (a new
+    // translation resizes the pages); then keep drawing the last good
+    // textures and try again next frame, rather than drawing a blank page.
+    let retry = 0
+    let retries = 0
     canvas.onpaint = () => {
-      if (g.upload("en", en) && g.upload("tr", tr)) drawGlass()
+      const ok = g.upload("en", en) && g.upload("tr", tr)
+      if (g.ready) drawGlass()
+      cancelAnimationFrame(retry)
+      if (!ok && retries++ < 30) retry = requestAnimationFrame(() => canvas.requestPaint?.())
+      if (ok) retries = 0
     }
+    // If the GPU drops the context, rebuild the renderer when it comes back.
+    const onLost = (e: Event) => e.preventDefault()
+    const onRestored = () => setGlEpoch((n) => n + 1)
+    canvas.addEventListener("webglcontextlost", onLost)
+    canvas.addEventListener("webglcontextrestored", onRestored)
     canvas.requestPaint?.()
     return () => {
+      cancelAnimationFrame(retry)
       canvas.onpaint = null
+      canvas.removeEventListener("webglcontextlost", onLost)
+      canvas.removeEventListener("webglcontextrestored", onRestored)
       g.dispose()
       glassRef.current = null
     }
-  }, [renderer, drawGlass])
+  }, [renderer, drawGlass, glEpoch])
 
   useEffect(() => {
     if (renderer !== "webgl") return
@@ -292,8 +311,11 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     const dpr = window.devicePixelRatio || 1
     canvas.width = Math.round((PAGE_WIDTH + 2 * DESK_MARGIN) * dpr)
     canvas.height = Math.round((height + 2 * DESK_MARGIN) * dpr)
+    // Resizing clears the canvas: redraw now from the current textures, then
+    // re-snapshot at the new size.
+    if (glassRef.current?.ready) drawGlass()
     canvas.requestPaint?.()
-  }, [renderer, height])
+  }, [renderer, height, drawGlass])
 
   // Scrolling moves the lamp relative to the page.
   useEffect(() => {
