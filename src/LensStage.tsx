@@ -282,7 +282,15 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     let retry = 0
     let retries = 0
     canvas.onpaint = () => {
-      const ok = g.upload("en", en) && g.upload("tr", tr)
+      const okEn = g.upload("en", en)
+      const okTr = g.upload("tr", tr)
+      const ok = okEn && okTr
+      if (import.meta.env.DEV) {
+        const dbg = ((window as unknown as { __lens?: Record<string, number> }).__lens ??= {})
+        dbg.paints = (dbg.paints ?? 0) + 1
+        dbg.enFail = (dbg.enFail ?? 0) + (okEn ? 0 : 1)
+        dbg.trFail = (dbg.trFail ?? 0) + (okTr ? 0 : 1)
+      }
       if (g.ready) drawGlass()
       cancelAnimationFrame(retry)
       if (!ok && retries++ < 30) retry = requestAnimationFrame(() => canvas.requestPaint?.())

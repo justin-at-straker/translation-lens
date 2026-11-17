@@ -321,11 +321,14 @@ export class GlassRenderer {
   upload(which: "en" | "tr", el: HTMLElement): boolean {
     const gl = this.gl
     const size = this.canvas.getElementImageDefaultSize?.(el) ?? {
-      width: Math.round(el.offsetWidth * devicePixelRatio),
-      height: Math.round(el.offsetHeight * devicePixelRatio),
+      width: el.offsetWidth * devicePixelRatio,
+      height: el.offsetHeight * devicePixelRatio,
     }
-    const w = Math.max(1, Math.round(size.width))
-    const h = Math.max(1, Math.round(size.height))
+    // The snapshot size is fractional at non-integer display scales (e.g.
+    // 249.75 x 105.7 at 125%). Rounding down makes the texture a pixel too
+    // small and the copy fails with INVALID_VALUE, so always round up.
+    const w = Math.max(1, Math.ceil(size.width))
+    const h = Math.max(1, Math.ceil(size.height))
     gl.activeTexture(which === "en" ? gl.TEXTURE0 : gl.TEXTURE1)
     const [cw, ch] = this.texSize[which]
     const resize = cw !== w || ch !== h
