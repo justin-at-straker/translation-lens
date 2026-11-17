@@ -2,28 +2,28 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { readKey, saveKey } from "./ai/model"
 import { translatePage } from "./ai/translate"
 import { Chat } from "./Chat"
-import { BUILT_IN_FR_CA, type Translations } from "./content"
+import { ENGLISH, type Translations } from "./content"
 import { webglSupported } from "./glass"
 import { canvasSupported, LensStage, type Renderer } from "./LensStage"
+import { Panel } from "./Panel"
+import { DEFAULT_SETTINGS, LANGUAGES, translationKey, type LensSettings } from "./settings"
 
 const RENDERER_LABELS: Record<Renderer, string> = {
   webgl: "HTML-in-Canvas · WebGL glass",
   canvas: "HTML-in-Canvas · 2D",
   css: "CSS fallback",
 }
-import { Panel } from "./Panel"
-import { BUILT_IN_KEY, DEFAULT_SETTINGS, LANGUAGES, translationKey, type LensSettings } from "./settings"
 
 type Shown = { key: string; lang: string; t: Translations }
 
 export function App() {
   const [settings, setSettings] = useState<LensSettings>(DEFAULT_SETTINGS)
   const [apiKey, setApiKey] = useState(readKey)
-  const [shown, setShown] = useState<Shown>({ key: BUILT_IN_KEY, lang: "fr-CA", t: BUILT_IN_FR_CA })
+  const [shown, setShown] = useState<Shown>({ key: "", lang: "en", t: ENGLISH })
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState("")
   const [rendererIndex, setRendererIndex] = useState(0)
-  const cache = useRef(new Map<string, Translations>([[BUILT_IN_KEY, BUILT_IN_FR_CA]]))
+  const cache = useRef(new Map<string, Translations>())
 
   const onChange = useCallback((patch: Partial<LensSettings>) => setSettings((s) => ({ ...s, ...patch })), [])
   const onKey = useCallback((k: string) => {

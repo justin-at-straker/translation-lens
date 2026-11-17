@@ -39,5 +39,3 @@ export const DEFAULT_SETTINGS: LensSettings = {
 export function translationKey(s: LensSettings) {
   return `${s.language}|${s.tone}|${s.keep.trim().toLowerCase()}`
 }
-
-export const BUILT_IN_KEY = translationKey(DEFAULT_SETTINGS)

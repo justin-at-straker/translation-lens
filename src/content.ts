@@ -49,37 +49,3 @@ export const SEGMENTS: Segment[] = [
 export type Translations = Record<string, string>
 
 export const ENGLISH: Translations = Object.fromEntries(SEGMENTS.map((s) => [s.id, s.en]))
-
-/** Built-in French (Canada), neutral tone, so the lens works before a key is added. */
-export const BUILT_IN_FR_CA: Translations = {
-  brand: "Harbourside Paddle Co.",
-  "nav.tours": "Sorties",
-  "nav.gear": "Équipement",
-  "nav.contact": "Nous joindre",
-  "hero.eyebrow": "Sortie à l’aube · 2 heures",
-  "hero.title": "Pagayez dans le port au lever du jour",
-  "hero.p1":
-    "Rendez-vous au hangar à bateaux à 5 h 45. Nous fournissons le kayak, la pagaie et le gilet de sauvetage; apportez des vêtements chauds et une bouteille d’eau.",
-  "hero.p2":
-    "La sortie dure environ deux heures et convient aux débutants. Si le vent dépasse 20 nœuds, nous la reportons au prochain matin calme.",
-  "hero.cta": "Réserver une place",
-  "hero.note": "Équipement fourni · Débutants bienvenus",
-  "bring.title": "Quoi apporter",
-  "bring.1": "Des vêtements chauds qui peuvent être mouillés",
-  "bring.2": "Une bouteille d’eau et une petite collation",
-  "bring.3": "Des lunettes de soleil avec cordon",
-  "bring.4": "Un sac étanche pour votre téléphone (nous en prêtons)",
-  "route.title": "L’itinéraire",
-  "route.p":
-    "Nous partons de la plage à côté du hangar à bateaux, longeons la digue devant l’ancien terminal de traversier, puis traversons jusqu’au phare pour le lever du soleil. Au retour, nous faisons une halte dans une anse abritée pour un chocolat chaud.",
-  "faq.title": "Questions",
-  "faq.q1": "Faut-il avoir de l’expérience?",
-  "faq.a1":
-    "Non. Chaque sortie commence par une leçon de quinze minutes sur la terre ferme, et un guide accompagne le groupe en tout temps.",
-  "faq.q2": "Et s’il pleut?",
-  "faq.a2":
-    "Une petite pluie fait partie du plaisir. Nous annulons seulement en cas de vents forts ou d’orages, et vous pouvez choisir une autre date ou obtenir un remboursement complet.",
-  "faq.q3": "Les enfants peuvent-ils venir?",
-  "faq.a3": "Oui, à partir de 10 ans, dans un kayak double avec un adulte.",
-  footer: "Harbourside Paddle Co. · Hangar 3, chemin Harbour",
-}
