@@ -6,8 +6,8 @@
 // them against the live UI and sends the results in the next request.
 import { agentTools } from "@ui-sdk/react/agent"
 import { generateText, isStepCount, jsonSchema, tool, type ModelMessage, type ToolSet } from "ai"
-import { LANGUAGES } from "../src/settings"
-import { json, MODEL, NO_THINKING, rateLimited, readJson } from "./_lib"
+import { LANGUAGES } from "../src/settings.js"
+import { json, MODEL, NO_THINKING, rateLimited, readJson } from "./_lib.js"
 
 const SYSTEM = `You operate a "translation lens" demo. A magnifying lens over an English web page
 shows the page translated. The Lens settings panel is made of ui-sdk components:

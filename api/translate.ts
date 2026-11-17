@@ -4,9 +4,9 @@
 // language, tone and a short do-not-translate list, so this route can't be
 // used to translate arbitrary text on our bill.
 import { generateText } from "ai"
-import { SEGMENTS, type Translations } from "../src/content"
-import { LANGUAGES, type Language, type Tone } from "../src/settings"
-import { json, MODEL, NO_THINKING, rateLimited, readJson } from "./_lib"
+import { SEGMENTS, type Translations } from "../src/content.js"
+import { LANGUAGES, type Language, type Tone } from "../src/settings.js"
+import { json, MODEL, NO_THINKING, rateLimited, readJson } from "./_lib.js"
 
 const TONES: Record<Tone, string> = {
   neutral: "a neutral, clear register",
