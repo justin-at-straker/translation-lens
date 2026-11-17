@@ -12,7 +12,12 @@ It's an experiment with three newer browser APIs:
 - **A WebGL glass shader.** One point light lights the scene. The lens is a domed glass that refracts with edge dispersion, Fresnel reflection and room reflections. It has a brushed-steel bezel and a varnished walnut handle, and the shadows are cast from the lamp. The page and panel are cards on a desk.
 - **[UI SDK](https://ui-sdk.dev) agent bridge.** Every setting is a UI SDK control, and the chat agent reads and changes them through `snapshot`/`act`, just as a person would. Controls the agent changes light up briefly.
 
-Translation and the agent use OpenAI (`gpt-6-luna`), called straight from the browser with **your own API key**. The key is stored in your browser's local storage and only ever sent to OpenAI. The page re-translates in one call whenever you change the language, tone or do-not-translate list, and results are cached.
+Translation and the agent run on **Google Gemini 2.5 Flash through [Vercel AI Gateway](https://vercel.com/docs/ai-gateway)**, from two Vercel Functions:
+
+- `/api/translate` translates the whole page in one call. The server owns the page text: callers choose only the language, tone and a short do-not-translate list. Results are cached.
+- `/api/agent` runs one model step at a time. The UI SDK tools (`snapshot`, `act`, `query`) execute in the browser, next to the live controls, and the page sends their results back for the next step.
+
+Authentication is Vercel OIDC, so there are no provider keys. Both routes validate input, cap output tokens and are rate limited per IP.
 
 ## Browser support
 
@@ -26,8 +31,7 @@ The link under the panel switches between whichever renderers your browser suppo
 
 ```sh
 pnpm install
-echo "OPENAI_API_KEY=sk-..." > .env.local   # optional: the dev server seeds the key field with it
-pnpm dev
+vercel link
+vercel env pull .env.local   # VERCEL_OIDC_TOKEN for AI Gateway; it expires after about 12 hours, so pull again
+pnpm dev                     # Vite also serves /api/* locally
 ```
-
-`.env.local` is only read by the dev server. Production builds never include a key; visitors paste their own.
