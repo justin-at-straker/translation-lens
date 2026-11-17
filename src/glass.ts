@@ -1,17 +1,16 @@
 // WebGL loupe. Both pages are live DOM children of the canvas; on each paint
 // event they're uploaded as textures with texElementSubImage2D (HTML-in-Canvas),
-// then one full-screen shader draws the English page with the loupe on top:
-// a domed glass lens (refraction, dispersion, fresnel, speculars), a brushed
-// steel bezel, a wooden handle, and the loupe's shadow and caustic.
+// then one full-screen shader draws the English page with the loupe on top.
+//
+// Everything is lit by one point light (a lamp above the page), so highlights
+// slide and shadows stretch as the loupe moves:
+//  - glass: a dome that refracts (bulge + dispersion) and reflects the room
+//  - bezel: a half-round brushed-steel ring with anisotropic highlights
+//  - handle: a knurled steel collar and a varnished walnut grip, as a capsule
+//  - shadows: projected from the lamp, with the lens's focused caustic
 
 type GLWithElements = WebGL2RenderingContext & {
-  texElementSubImage2D?: (
-    target: number,
-    level: number,
-    x: number,
-    y: number,
-    el: Element,
-  ) => void
+  texElementSubImage2D?: (target: number, level: number, x: number, y: number, el: Element) => void
 }
 
 type DrawableCanvas = HTMLCanvasElement & {
@@ -24,6 +23,8 @@ export const webglSupported =
 
 export type GlassState = {
   lens: { x: number; y: number }
+  /** Lamp position in page CSS px; z is its height above the page. */
+  lamp: { x: number; y: number; z: number }
   radius: number
   magnify: number
   refraction: boolean
@@ -44,11 +45,14 @@ uniform float uDpr;
 uniform vec2 uEnSize;   // CSS px
 uniform vec2 uTrSize;
 uniform vec2 uL;        // lens centre, CSS px
+uniform vec3 uLamp;     // lamp position, CSS px (z = height above the page)
 uniform float uR, uM, uRefr, uTime, uBusy;
 out vec4 outColor;
 
-// Light from the upper left (CSS space: +y is down).
-const vec3 LIGHT = vec3(-0.42, -0.62, 0.66);
+// Heights above the page, CSS px.
+const float Z_GLASS = 34.0;
+const float Z_HANDLE = 26.0;
+const vec3 V = vec3(0.0, 0.0, 1.0); // orthographic viewer, looking down
 
 vec3 en(vec2 p) { return texture(uEn, p / uEnSize).rgb; }
 vec3 tr(vec2 p) { return texture(uTr, clamp(p / uTrSize, 0.0, 1.0)).rgb; }
@@ -59,71 +63,125 @@ float sdSeg(vec2 p, vec2 a, vec2 b, out float h) {
   return length(pa - ba * h);
 }
 
+vec3 toLamp(vec3 P) { return normalize(uLamp - P); }
+
+// A small studio: warm room below the horizon, a cool ceiling, a big softbox
+// where the lamp is, and a dark patch straight up where the viewer stands.
+vec3 env(vec3 r, vec3 l) {
+  vec3 room = vec3(0.42, 0.39, 0.35);
+  vec3 ceiling = vec3(0.86, 0.88, 0.92);
+  vec3 e = mix(room, ceiling, smoothstep(-0.15, 0.75, r.z));
+  float ld = max(dot(r, l), 0.0);
+  e += pow(ld, 90.0) * 4.0 + pow(ld, 10.0) * 0.35;
+  e *= 1.0 - 0.45 * smoothstep(0.9, 1.0, r.z);
+  return e;
+}
+
+float fresnel(float cosT, float f0) { return f0 + (1.0 - f0) * pow(1.0 - cosT, 5.0); }
+
+// Where a point at height z casts its shadow, relative to the point.
+vec2 shadowOffset(vec2 at, float z) { return (at - uLamp.xy) * z / max(uLamp.z - z, 1.0); }
+
+// Brushed metal: environment reflection plus a highlight stretched across
+// the brushing direction T.
+vec3 brushedMetal(vec3 n, vec3 T, vec3 l, vec3 tint, float brush) {
+  vec3 r = reflect(-V, n);
+  vec3 c = tint * env(r, l);
+  vec3 h = normalize(l + V);
+  float th = dot(T, h);
+  float aniso = pow(sqrt(max(0.0, 1.0 - th * th)), 160.0) * max(dot(n, l), 0.0);
+  c += aniso * 1.4 * (0.92 + 0.12 * brush);
+  c *= 0.96 + 0.06 * brush;
+  return c;
+}
+
 void main() {
-  vec3 L3 = normalize(LIGHT);
-  vec3 H = normalize(L3 + vec3(0.0, 0.0, 1.0));
   vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr;
   vec2 d = p - uL;
   float dist = length(d);
   float aa = 0.8;
-  float bw = max(9.0, uR * 0.085);   // bezel width
+  float bw = max(10.0, uR * 0.09);   // bezel width
   float ro = uR + bw;
   vec3 col = en(p);
 
-  // ---- Shadow and caustic on the page ----
-  vec2 so = vec2(16.0, 30.0) * (0.6 + uR / 300.0);
-  float sd = length(p - uL - so) - ro;
-  float shadow = 1.0 - smoothstep(-uR * 0.25, uR * 0.6, sd);
-  col *= 1.0 - 0.32 * shadow;
-  float cd = length(p - uL - so * 0.75);
-  float caustic = exp(-pow((cd - uR * 0.42) / (uR * 0.09), 2.0)) * 0.6
-                + exp(-pow(cd / (uR * 0.16), 2.0));
-  col += 0.16 * caustic * vec3(1.0, 0.96, 0.86) * shadow;
+  // ---- Shadows on the page, projected from the lamp ----
+  vec2 sc = uL + shadowOffset(uL, Z_GLASS);
+  float sdl = length(p - sc);
+  float blur = 6.0 + Z_GLASS * 0.5;
+  // Bezel ring: a solid occluder.
+  float ring = 1.0 - smoothstep(0.0, blur, abs(sdl - (uR + bw * 0.5)) - bw * 0.5);
+  // Glass: lets most light through, focuses some into a caustic.
+  float inside = 1.0 - smoothstep(uR - blur, uR + blur * 0.3, sdl);
+  float caustic = exp(-pow(sdl / (uR * 0.2), 2.0)) + 0.35 * exp(-pow((sdl - uR * 0.55) / (uR * 0.07), 2.0));
+  // Soft contact shadow under the whole loupe.
+  float ao = 1.0 - smoothstep(-uR * 0.1, uR * 0.6, sdl - ro);
 
-  // ---- Handle: steel collar then walnut grip ----
   vec2 dir = normalize(vec2(1.0, 1.0));
-  vec2 a = uL + dir * (ro - 3.0);
-  vec2 b = a + dir * max(120.0, uR * 0.95);
+  vec2 a = uL + dir * (ro - 4.0);
+  vec2 b = a + dir * max(130.0, uR * 1.0);
   float hw = max(11.0, uR * 0.085);
-  float ht;
-  float hsd = sdSeg(p - so * 0.55, a, b, ht) - hw;
-  col *= 1.0 - 0.25 * (1.0 - smoothstep(-4.0, 22.0, hsd));
+  vec2 hoff = shadowOffset((a + b) * 0.5, Z_HANDLE);
+  float hs;
+  float hsd = sdSeg(p - hoff, a, b, hs) - hw;
+  float handleShadow = 1.0 - smoothstep(-2.0, 14.0, hsd);
+
+  float shade = 1.0 - 0.42 * ring - 0.10 * inside * (1.0 - ring) - 0.12 * ao - 0.38 * handleShadow;
+  col *= max(shade, 0.35);
+  col += 0.22 * caustic * inside * vec3(1.0, 0.96, 0.85);
+
+  // ---- Handle: capsule with a knurled steel collar and a walnut grip ----
   float t;
   float hd = sdSeg(p, a, b, t) - hw;
   if (hd < aa) {
-    vec2 perp = vec2(-dir.y, dir.x);
-    float across = clamp(dot(p - a, perp) / hw, -1.0, 1.0);
+    vec2 c = a + (b - a) * t;
+    vec2 dv = p - c;
+    float dd = length(dv);
+    float z = sqrt(max(hw * hw - dd * dd, 0.0));
+    vec3 n = normalize(vec3(dv, z));
+    vec3 P = vec3(p, Z_HANDLE + z);
+    vec3 l = toLamp(P);
     float along = t * length(b - a);
-    vec3 n = normalize(vec3(perp * across, sqrt(max(0.0, 1.0 - across * across))));
-    float diff = 0.3 + 0.8 * max(dot(n, L3), 0.0);
-    vec3 c;
-    if (along < 30.0) {
-      float spec = pow(max(dot(n, H), 0.0), 50.0);
-      float ridge = smoothstep(0.0, 2.0, abs(along - 15.0) - 4.0);
-      c = vec3(0.66, 0.67, 0.70) * diff * mix(0.75, 1.0, ridge) + spec;
+    vec3 axis = vec3(dir, 0.0);
+    vec3 hc;
+    if (along < 34.0) {
+      // Knurled collar: ridges tilt the normal along the axis.
+      float ridge = sin(along * 2.4);
+      vec3 nk = normalize(n + axis * ridge * 0.35);
+      float groove = smoothstep(0.0, 1.5, abs(along - 4.0) - 1.0) * smoothstep(0.0, 1.5, abs(along - 30.0) - 1.0);
+      hc = brushedMetal(nk, axis, l, vec3(0.70, 0.71, 0.74), 0.5 + 0.5 * ridge) * mix(0.55, 1.0, groove);
     } else {
-      float grain = 0.5 + 0.5 * sin(along * 0.32 + across * 2.5 + sin(along * 0.045) * 5.0);
-      vec3 wood = mix(vec3(0.20, 0.11, 0.06), vec3(0.38, 0.22, 0.12), grain);
-      float spec = pow(max(dot(n, H), 0.0), 26.0) * 0.35;
-      c = wood * diff + spec;
-      // Rounded end cap.
-      c *= 1.0 - 0.35 * smoothstep(0.92, 1.0, t);
+      float g1 = sin(along * 0.30 + dv.x * 0.08 + sin(along * 0.045) * 5.0);
+      float g2 = sin(along * 1.7 + g1 * 2.0);
+      vec3 wood = mix(vec3(0.17, 0.09, 0.05), vec3(0.40, 0.23, 0.12), 0.5 + 0.35 * g1 + 0.15 * g2);
+      float diff = max(dot(n, l), 0.0);
+      float amb = 0.18 + 0.12 * n.z;
+      hc = wood * (diff * 0.95 + amb);
+      // Varnish: a clear coat that reflects the room, strongest at grazing angles.
+      vec3 r = reflect(-V, n);
+      float f = fresnel(max(n.z, 0.0), 0.05);
+      hc += env(r, l) * f * 0.55;
+      hc += pow(max(dot(n, normalize(l + V)), 0.0), 120.0) * 0.8;
     }
-    col = mix(col, c, 1.0 - smoothstep(-aa, aa, hd));
+    // Occlusion where the collar meets the bezel.
+    hc *= mix(0.55, 1.0, smoothstep(0.0, 14.0, along));
+    col = mix(col, hc, 1.0 - smoothstep(-aa, aa, hd));
   }
 
-  // ---- Bezel: brushed steel torus ----
+  // ---- Bezel: half-round brushed steel ----
   if (dist < ro + aa && dist > uR - aa) {
     float rt = clamp((dist - uR) / bw, 0.0, 1.0);
     vec2 rd = d / max(dist, 1e-3);
     float prof = rt * 2.0 - 1.0;
-    vec3 n = normalize(vec3(rd * prof * 0.92, sqrt(max(0.0, 1.0 - prof * prof * 0.85))));
-    float diff = 0.4 + 0.65 * max(dot(n, L3), 0.0);
-    float spec = pow(max(dot(n, H), 0.0), 70.0);
+    float nz = sqrt(max(0.0, 1.0 - prof * prof));
+    vec3 n = normalize(vec3(rd * prof, nz * 0.85 + 0.15));
+    vec3 P = vec3(p, Z_GLASS + nz * bw * 0.5);
+    vec3 l = toLamp(P);
     float ang = atan(d.y, d.x);
-    float brushed = 0.035 * sin(ang * 140.0) + 0.02 * sin(ang * 53.0 + 1.3);
-    vec3 steel = vec3(0.68, 0.69, 0.72) * diff + spec * 1.1 + brushed;
-    steel *= 0.7 + 0.3 * smoothstep(0.0, 0.15, rt) * smoothstep(1.0, 0.82, rt);
+    float brush = 0.5 + 0.5 * sin(ang * 70.0 + sin(ang * 11.0) * 3.0);
+    vec3 T = vec3(-rd.y, rd.x, 0.0); // brushed around the ring
+    vec3 steel = brushedMetal(n, T, l, vec3(0.74, 0.75, 0.78), brush);
+    // Seams at the inner and outer edges.
+    steel *= 0.6 + 0.4 * smoothstep(0.0, 0.14, rt) * smoothstep(1.0, 0.86, rt);
     if (uBusy > 0.5) {
       float s = fract(ang / 6.28318 - uTime * 0.6);
       steel += vec3(0.18, 0.32, 1.0) * smoothstep(0.82, 1.0, s) * 0.9;
@@ -138,42 +196,29 @@ void main() {
     float h = sqrt(max(0.0, 1.0 - r * r));
     // Barrel bulge: towards the rim, sample closer to the centre.
     float bulge = uRefr * 0.26 * pow(1.0 - h, 1.5);
-    float sc = (1.0 / uM) * (1.0 - bulge);
+    float sc2 = (1.0 / uM) * (1.0 - bulge);
     float ca = uRefr * 0.012 * pow(1.0 - h, 1.3);
     vec3 g;
-    g.r = tr(uL + d * sc * (1.0 + ca)).r;
-    g.g = tr(uL + d * sc).g;
-    g.b = tr(uL + d * sc * (1.0 - ca)).b;
-
+    g.r = tr(uL + d * sc2 * (1.0 + ca)).r;
+    g.g = tr(uL + d * sc2).g;
+    g.b = tr(uL + d * sc2 * (1.0 - ca)).b;
     // Thickness tint at the edge, like the green of real glass.
     g *= mix(vec3(1.0), vec3(0.88, 0.96, 0.95), pow(1.0 - h, 1.6));
 
-    vec3 n = normalize(vec3(d / uR * 0.85, h + 0.12));
-    float fres = pow(1.0 - max(n.z, 0.0), 3.0);
-    g = mix(g, vec3(0.97, 0.99, 1.0), fres * 0.5);
+    // A shallow dome: reflects the room, more at the rim (fresnel).
+    vec3 n = normalize(vec3(d / uR * 0.55, h + 0.25));
+    vec3 P = vec3(p, Z_GLASS + h * 10.0);
+    vec3 l = toLamp(P);
+    vec3 rr = reflect(-V, n);
+    float f = fresnel(max(n.z, 0.0), 0.04);
+    g = mix(g, env(rr, l), clamp(f, 0.0, 1.0) * 0.65);
 
-    // The bezel shades the glass on the side away from the light.
-    vec2 ld = normalize(L3.xy);
+    // The bezel shades the glass on the side away from the lamp, and the lit
+    // side picks up a thin bright edge.
+    vec2 ld = normalize(uLamp.xy - uL);
     float away = 0.5 + 0.5 * dot(normalize(d + 1e-4), -ld);
-    g *= 1.0 - 0.24 * smoothstep(0.78, 1.0, r) * away;
-    // ...and the lit side catches a thin bright rim.
-    g += 0.18 * smoothstep(0.9, 1.0, r) * (1.0 - away);
-
-    // Speculars, kept near the rim so they don't sit on the text: a flatter
-    // normal pushes the hot spot outwards. A sharp key glint upper left and a
-    // faint back glint lower right.
-    vec3 ns = normalize(vec3(d / uR * 0.3, h));
-    g += pow(max(dot(ns, H), 0.0), 260.0) * 0.75;
-    vec3 H2 = normalize(normalize(vec3(0.55, 0.6, 0.6)) + vec3(0.0, 0.0, 1.0));
-    g += pow(max(dot(ns, H2), 0.0), 420.0) * 0.35;
-
-    // A soft window reflection, upper left.
-    vec2 q = d / uR;
-    float c0 = cos(0.6), s0 = sin(0.6);
-    vec2 wq = mat2(c0, -s0, s0, c0) * (q - vec2(-0.42, -0.62));
-    vec2 wb = abs(wq) - vec2(0.26, 0.035);
-    float wd = length(max(wb, 0.0)) + min(max(wb.x, wb.y), 0.0) - 0.05;
-    g = mix(g, vec3(1.0), (1.0 - smoothstep(-0.02, 0.05, wd)) * 0.4);
+    g *= 1.0 - 0.22 * smoothstep(0.8, 1.0, r) * away;
+    g += 0.16 * smoothstep(0.92, 1.0, r) * (1.0 - away);
 
     float m = 1.0 - smoothstep(uR - aa, uR + aa, dist);
     col = mix(col, g, m);
@@ -190,6 +235,8 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string) {
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? "shader error")
   return s
 }
+
+const UNIFORMS = ["uEn", "uTr", "uRes", "uDpr", "uEnSize", "uTrSize", "uL", "uLamp", "uR", "uM", "uRefr", "uTime", "uBusy"]
 
 export class GlassRenderer {
   private gl: GLWithElements
@@ -219,8 +266,7 @@ export class GlassRenderer {
     gl.enableVertexAttribArray(loc)
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
 
-    for (const name of ["uEn", "uTr", "uRes", "uDpr", "uEnSize", "uTrSize", "uL", "uR", "uM", "uRefr", "uTime", "uBusy"])
-      this.u[name] = gl.getUniformLocation(prog, name)
+    for (const name of UNIFORMS) this.u[name] = gl.getUniformLocation(prog, name)
     this.tex = { en: this.makeTexture(), tr: this.makeTexture() }
     gl.uniform1i(this.u.uEn, 0)
     gl.uniform1i(this.u.uTr, 1)
@@ -275,6 +321,7 @@ export class GlassRenderer {
     gl.uniform2f(this.u.uEnSize, en.offsetWidth, en.offsetHeight)
     gl.uniform2f(this.u.uTrSize, tr.offsetWidth, tr.offsetHeight)
     gl.uniform2f(this.u.uL, s.lens.x, s.lens.y)
+    gl.uniform3f(this.u.uLamp, s.lamp.x, s.lamp.y, s.lamp.z)
     gl.uniform1f(this.u.uR, s.radius)
     gl.uniform1f(this.u.uM, s.magnify)
     gl.uniform1f(this.u.uRefr, s.refraction ? 1 : 0)

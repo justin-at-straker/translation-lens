@@ -232,7 +232,14 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     const tr = trRef.current
     if (!g || !canvas || !en || !tr) return
     const { lens: L, settings: s, busy: b } = stateRef.current
-    g.draw({ lens: L, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
+    // The lamp hangs 700px out from the middle of what's on screen, 650px up,
+    // so scrolling and moving the loupe both change how the light falls.
+    const wrap = wrapRef.current
+    const vp = wrap?.closest(".viewport") as HTMLElement | null
+    const midY = vp && wrap ? vp.scrollTop + vp.clientHeight / 2 - wrap.offsetTop : 400
+    const a = (s.lightAngle * Math.PI) / 180
+    const lamp = { x: PAGE_WIDTH / 2 + Math.cos(a) * 700, y: midY + Math.sin(a) * 700, z: 650 }
+    g.draw({ lens: L, lamp, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
     // WebGL can't infer where elements were drawn, so tell the canvas: the
     // English page sits as-is; the translated page is scaled about the lens
     // centre and only takes clicks inside the lens.
@@ -284,6 +291,16 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     canvas.height = Math.round(height * dpr)
     canvas.requestPaint?.()
   }, [renderer, height])
+
+  // Scrolling moves the lamp relative to the page.
+  useEffect(() => {
+    if (renderer !== "webgl") return
+    const vp = wrapRef.current?.closest(".viewport")
+    if (!vp) return
+    const onScroll = () => drawGlass()
+    vp.addEventListener("scroll", onScroll, { passive: true })
+    return () => vp.removeEventListener("scroll", onScroll)
+  }, [renderer, drawGlass])
 
   // Lens moves and setting changes only need a redraw, not a re-snapshot.
   useEffect(() => {

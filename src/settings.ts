@@ -21,6 +21,8 @@ export type LensSettings = {
   magnify: number
   /** Bulged rim bands (canvas renderer only). */
   refraction: boolean
+  /** Where the lamp sits, degrees clockwise from screen-right (225 = upper left). */
+  lightAngle: number
 }
 
 export const DEFAULT_SETTINGS: LensSettings = {
@@ -30,6 +32,7 @@ export const DEFAULT_SETTINGS: LensSettings = {
   size: 150,
   magnify: 1.12,
   refraction: true,
+  lightAngle: 225,
 }
 
 /** The settings that change the translation itself, as a cache key. */

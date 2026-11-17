@@ -171,6 +171,17 @@ export function Panel({ settings, onChange }: Props) {
         onChange={(v, d) => set("magnify", v, d)}
       />
 
+      <SliderRow
+        label="Light direction"
+        value={settings.lightAngle}
+        min={0}
+        max={355}
+        step={5}
+        agent={marked.has("lightAngle")}
+        format={(v) => `${v}°`}
+        onChange={(v, d) => set("lightAngle", v, d)}
+      />
+
       <label className={`row switch-row${marked.has("refraction") ? " row-agent" : ""}`}>
         <span className="row-label">Edge refraction</span>
         <Switch
