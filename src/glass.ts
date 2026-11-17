@@ -2,8 +2,8 @@
 // children are uploaded as textures with texElementSubImage2D (HTML-in-Canvas):
 //  - "scene": the app itself (scrolling page + settings/chat panel) with a
 //    transparent background, so the shader draws the desk underneath
-//  - "tr": the translated page, a nested drawable (excluded from the scene's
-//    snapshot) sitting exactly over the English page
+//  - "tr": the translated page, a separate drawable child of the canvas, drawn
+//    exactly over the English page
 //
 // One point light (a lamp above the desk) lights everything: the cards cast
 // shadows, highlights slide, and the loupe on top has
@@ -96,8 +96,11 @@ vec3 base(vec2 p) {
 // What the lens sees at q: the translated page where the page is, else the scene.
 vec3 lensView(vec2 q) {
   vec2 t = q - uTrOrigin;
-  if (t.x >= 0.0 && t.y >= 0.0 && t.x < uTrSize.x && t.y < uTrSize.y)
-    return texture(uTr, t / uTrSize).rgb * lampLight(q);
+  if (t.x >= 0.0 && t.y >= 0.0 && t.x < uTrSize.x && t.y < uTrSize.y) {
+    vec4 tc = texture(uTr, t / uTrSize);
+    // An empty capture is transparent black: show the page itself, never black.
+    return mix(base(q), tc.rgb * lampLight(q), smoothstep(0.3, 0.7, tc.a));
+  }
   return base(q);
 }
 

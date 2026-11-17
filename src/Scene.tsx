@@ -4,8 +4,8 @@
 //     <div drawable class="scene-root">              the app, transparent background
 //       <div class="scene-scroll">                   the page scrolls natively
 //         English page
-//         <div drawable class="scene-tr">            translated page (nested drawable,
-//       <aside class="scene-panel">                   so it's not in the root snapshot)
+//       <aside class="scene-panel">                  settings + chat
+//     <div drawable class="scene-tr">               translated page, its own snapshot
 //
 // The root sits at the canvas origin with an identity transform, so every
 // control keeps its real DOM position: clicks, focus, scrolling and ui-sdk
@@ -63,6 +63,11 @@ export function Scene({ translated, lang, settings, busy, children }: Props) {
     if (!en || !tr) return
     alignBlocks(en, tr)
     document.fonts?.ready.then(() => alignBlocks(en, tr))
+    // Re-capture a couple of times after new copy lands, in case the first
+    // snapshot was taken before the new text had painted.
+    const canvas = canvasRef.current
+    const timers = [120, 600].map((ms) => window.setTimeout(() => canvas?.requestPaint?.(), ms))
+    return () => timers.forEach((t) => window.clearTimeout(t))
   }, [translated])
 
   const stateRef = useRef({ lens, settings, busy, size })
@@ -164,6 +169,16 @@ export function Scene({ translated, lang, settings, busy, children }: Props) {
     canvas.requestPaint?.()
   }, [size, draw])
 
+  // The translated page sits under the pointer (inside the lens) but outside
+  // the scroll area: pass its wheel events on so the page still scrolls.
+  useEffect(() => {
+    const tr = trRef.current
+    if (!tr) return
+    const on = (e: WheelEvent) => scrollRef.current?.scrollBy({ left: e.deltaX, top: e.deltaY })
+    tr.addEventListener("wheel", on, { passive: true })
+    return () => tr.removeEventListener("wheel", on)
+  }, [])
+
   // The loupe follows the pointer anywhere in the window.
   useEffect(() => {
     const on = (e: PointerEvent) => setLens({ x: e.clientX, y: e.clientY })
@@ -201,12 +216,15 @@ export function Scene({ translated, lang, settings, busy, children }: Props) {
             <div ref={enRef}>
               <Page t={ENGLISH} lang="en" />
             </div>
-            <div ref={trRef} className="scene-tr" {...{ drawable: "" }}>
-              <Page t={translated} lang={lang} variant="lens" hidden />
-            </div>
           </div>
         </div>
         <aside className="scene-panel">{children}</aside>
+      </div>
+      {/* A direct drawable child, so it's a separate snapshot from the app.
+          Its layout position doesn't matter: the shader and the hit-test
+          geometry place it over the English page. */}
+      <div ref={trRef} className="scene-tr" {...{ drawable: "" }}>
+        <Page t={translated} lang={lang} variant="lens" hidden />
       </div>
     </canvas>
   )

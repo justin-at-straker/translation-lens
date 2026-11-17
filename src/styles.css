@@ -52,7 +52,7 @@ html, body, #root { margin: 0; height: 100%; background: var(--desk); }
 .scene-scroll { position: absolute; left: 0; top: 0; bottom: 0; right: 380px; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; }
 .scene-pagewrap { position: relative; width: 960px; margin: 40px auto 80px; }
 .scene-pagewrap .page { border-radius: 10px; }
-.scene-tr { position: absolute; left: 0; top: 0; width: 960px; }
+.scene-tr { width: 960px; }
 .scene-panel {
   position: absolute; top: 20px; right: 20px; width: 340px; max-height: calc(100% - 40px);
   display: flex; flex-direction: column; gap: 16px; padding: 16px; overflow-y: auto;
