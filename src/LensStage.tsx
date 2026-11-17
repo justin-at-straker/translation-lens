@@ -1,20 +1,15 @@
-// The page with a translation lens over it. Three renderers:
-//  - "webgl": HTML-in-Canvas into WebGL textures, drawn by the glass shader in
-//    glass.ts (real refraction, steel bezel, wooden handle).
+// Fallback renderers for browsers without WebGL HTML-in-Canvas (the WebGL
+// scene lives in Scene.tsx):
 //  - "canvas": HTML-in-Canvas 2D. Both pages are live DOM children of a drawable
 //    canvas; each frame draws the English page, then the translated page
-//    through a circular clip with magnified rim bands (fake refraction) and a
-//    glass rim. Text under the lens stays hit-testable via element geometry.
-//  - "css": fallback for browsers without the API. Same idea with clip-path.
+//    through a circular clip with magnified rim bands and a glass rim.
+//  - "css": no HTML-in-Canvas at all. Same idea with clip-path.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ENGLISH, type Translations } from "./content"
-import { GlassRenderer } from "./glass"
 import { Page } from "./Page"
 import type { LensSettings } from "./settings"
 
 export const PAGE_WIDTH = 960
-/** Desk around the page in the WebGL renderer, so the loupe can hang off the edge. */
-const DESK_MARGIN = 200
 
 type Canvas2D = CanvasRenderingContext2D & {
   drawElementImage?: (el: Element, dx: number, dy: number, dw: number, dh: number) => DOMMatrix | undefined
@@ -36,12 +31,12 @@ type Props = {
   lang: string
   settings: LensSettings
   busy: boolean
-  renderer: Renderer
+  renderer: "canvas" | "css"
 }
 
 /** Give each pair of matching blocks the taller of the two heights, so the
  *  translated page lines up with the English one block by block. */
-function alignBlocks(a: HTMLElement, b: HTMLElement) {
+export function alignBlocks(a: HTMLElement, b: HTMLElement) {
   const pairs: [HTMLElement, HTMLElement][] = []
   a.querySelectorAll<HTMLElement>("[data-seg]").forEach((el) => {
     const other = b.querySelector<HTMLElement>(`[data-seg="${el.dataset.seg}"]`)
@@ -60,7 +55,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
   const [lens, setLens] = useState({ x: 330, y: 300 })
   const [height, setHeight] = useState(1200)
 
-  // Align block heights whenever the copy changes, then size the stage.
   useLayoutEffect(() => {
     const en = enRef.current
     const tr = trRef.current
@@ -70,14 +64,11 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       setHeight(en.offsetHeight)
     }
     run()
-    // Web fonts land after first layout and change line breaks.
     document.fonts?.ready.then(run)
   }, [translated, renderer])
 
-  // ---- Canvas renderer -------------------------------------------------
-  const M = renderer === "webgl" ? DESK_MARGIN : 0
-  const stateRef = useRef({ lens, settings, busy, height, M })
-  stateRef.current = { lens, settings, busy, height, M }
+  const stateRef = useRef({ lens, settings, busy })
+  stateRef.current = { lens, settings, busy }
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current
@@ -100,7 +91,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       return // no snapshot yet; the next paint event will draw
     }
 
-    // Drop shadow under the glass.
     ctx.save()
     ctx.shadowColor = "rgba(20, 24, 40, 0.32)"
     ctx.shadowBlur = 44
@@ -111,8 +101,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     ctx.fill()
     ctx.restore()
 
-    // Translated page through the lens. Outer bands are magnified more, which
-    // reads as the glass bulging at its edge.
     // Many thin bands, magnified more towards the rim: reads as glass bulging
     // at its edge. Drawn outermost first; each inner band covers the last.
     const bands: [number, number][] = [[R, m]]
@@ -120,7 +108,7 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       bands.length = 0
       const steps = 14
       for (let i = 0; i <= steps; i++) {
-        const f = i / steps // 0 at the rim, 1 at the inner edge of the bulge
+        const f = i / steps
         bands.push([R * (1 - 0.22 * f), m * (1 + 0.16 * (1 - f) ** 2)])
       }
     }
@@ -138,7 +126,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       ctx.restore()
     }
 
-    // Only the part of the translated page inside the lens takes clicks.
     if (canvas.updateElementGeometry) {
       try {
         canvas.updateElementGeometry(tr, {
@@ -151,7 +138,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
       tr.style.pointerEvents = "none"
     }
 
-    // Glass: a faint tint, a white inner rim, chromatic fringes, a highlight.
     ctx.save()
     ctx.beginPath()
     ctx.arc(L.x, L.y, R, 0, Math.PI * 2)
@@ -180,7 +166,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     ctx.beginPath()
     ctx.ellipse(L.x - R * 0.32, L.y - R * 0.56, R * 0.34, R * 0.12, -0.42, 0, Math.PI * 2)
     ctx.fill()
-    // Handle.
     ctx.lineCap = "round"
     ctx.lineWidth = 16
     ctx.strokeStyle = "#1B1B1A"
@@ -188,7 +173,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     ctx.moveTo(L.x + R * 0.72, L.y + R * 0.72)
     ctx.lineTo(L.x + R * 0.72 + 64, L.y + R * 0.72 + 64)
     ctx.stroke()
-    // Working: a sweeping arc while a translation is in flight.
     if (isBusy) {
       const t = performance.now() / 400
       ctx.lineWidth = 3
@@ -202,7 +186,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     if (isBusy) requestAnimationFrame(() => canvas.requestPaint?.() ?? paint())
   }, [])
 
-  // Size the canvas backing store to the page, and hook the paint event.
   useEffect(() => {
     if (renderer !== "canvas") return
     const canvas = canvasRef.current
@@ -217,7 +200,6 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     }
   }, [renderer, height, paint])
 
-  // Repaint on anything that changes the drawing.
   useEffect(() => {
     if (renderer !== "canvas") return
     const canvas = canvasRef.current
@@ -225,160 +207,22 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     else paint()
   }, [renderer, lens, settings, busy, translated, paint])
 
-  // ---- WebGL glass renderer ---------------------------------------------
-  const glassRef = useRef<GlassRenderer | null>(null)
-  const [glEpoch, setGlEpoch] = useState(0)
-
-  const drawGlass = useCallback(() => {
-    const g = glassRef.current
-    const canvas = canvasRef.current
-    const en = enRef.current
-    const tr = trRef.current
-    // Never draw before both pages have been captured: that would be black.
-    if (!g || !canvas || !en || !tr || !g.ready) return
-    const { lens: L, settings: s, busy: b, M: margin } = stateRef.current
-    // The lamp hangs 700px out from the middle of what's on screen, 650px up,
-    // so scrolling and moving the loupe both change how the light falls.
-    const wrap = wrapRef.current
-    const vp = wrap?.closest(".viewport") as HTMLElement | null
-    const midY = vp && wrap ? vp.scrollTop + vp.clientHeight / 2 - wrap.offsetTop - margin : 400
-    const a = (s.lightAngle * Math.PI) / 180
-    const lamp = { x: PAGE_WIDTH / 2 + Math.cos(a) * 700, y: midY + Math.sin(a) * 700, z: 650 }
-    g.draw({ lens: L, lamp, margin, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b })
-    // WebGL can't infer where elements were drawn, so tell the canvas: the
-    // English page sits as-is; the translated page is scaled about the lens
-    // centre and only takes clicks inside the lens.
-    const m = s.magnify
-    const R = s.size
-    try {
-      canvas.updateElementGeometry?.(en, { canvasTransform: new DOMMatrix([1, 0, 0, 1, margin, margin]) })
-      canvas.updateElementGeometry?.(tr, {
-        canvasTransform: new DOMMatrix([m, 0, 0, m, margin + L.x * (1 - m), margin + L.y * (1 - m)]),
-        canvasClip: { x: L.x - R / m, y: L.y - R / m, width: (2 * R) / m, height: (2 * R) / m },
-      })
-    } catch {
-      tr.style.pointerEvents = "none"
-    }
-  }, [])
-
-  useEffect(() => {
-    if (renderer !== "webgl") return
-    const canvas = canvasRef.current
-    const en = enRef.current
-    const tr = trRef.current
-    if (!canvas || !en || !tr) return
-    let g: GlassRenderer
-    try {
-      g = new GlassRenderer(canvas)
-    } catch (e) {
-      console.error(e)
-      return
-    }
-    glassRef.current = g
-    // The paint event fires when either page's rendering changes: re-snapshot
-    // both. A snapshot can lag a frame behind a layout change (a new
-    // translation resizes the pages); then keep drawing the last good
-    // textures and try again next frame, rather than drawing a blank page.
-    let retry = 0
-    let retries = 0
-    canvas.onpaint = () => {
-      const okEn = g.upload("en", en)
-      const okTr = g.upload("tr", tr)
-      const ok = okEn && okTr
-      if (import.meta.env.DEV) {
-        const dbg = ((window as unknown as { __lens?: Record<string, number> }).__lens ??= {})
-        dbg.paints = (dbg.paints ?? 0) + 1
-        dbg.enFail = (dbg.enFail ?? 0) + (okEn ? 0 : 1)
-        dbg.trFail = (dbg.trFail ?? 0) + (okTr ? 0 : 1)
-      }
-      if (g.ready) drawGlass()
-      cancelAnimationFrame(retry)
-      if (!ok && retries++ < 30) retry = requestAnimationFrame(() => canvas.requestPaint?.())
-      if (ok) retries = 0
-    }
-    // If the GPU drops the context, rebuild the renderer when it comes back.
-    const onLost = (e: Event) => e.preventDefault()
-    const onRestored = () => setGlEpoch((n) => n + 1)
-    canvas.addEventListener("webglcontextlost", onLost)
-    canvas.addEventListener("webglcontextrestored", onRestored)
-    canvas.requestPaint?.()
-    return () => {
-      cancelAnimationFrame(retry)
-      canvas.onpaint = null
-      canvas.removeEventListener("webglcontextlost", onLost)
-      canvas.removeEventListener("webglcontextrestored", onRestored)
-      g.dispose()
-      glassRef.current = null
-    }
-  }, [renderer, drawGlass, glEpoch])
-
-  useEffect(() => {
-    if (renderer !== "webgl") return
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round((PAGE_WIDTH + 2 * DESK_MARGIN) * dpr)
-    canvas.height = Math.round((height + 2 * DESK_MARGIN) * dpr)
-    // Resizing clears the canvas: redraw now from the current textures, then
-    // re-snapshot at the new size.
-    if (glassRef.current?.ready) drawGlass()
-    canvas.requestPaint?.()
-  }, [renderer, height, drawGlass])
-
-  // Scrolling moves the lamp relative to the page.
-  useEffect(() => {
-    if (renderer !== "webgl") return
-    const vp = wrapRef.current?.closest(".viewport")
-    if (!vp) return
-    const onScroll = () => drawGlass()
-    vp.addEventListener("scroll", onScroll, { passive: true })
-    return () => vp.removeEventListener("scroll", onScroll)
-  }, [renderer, drawGlass])
-
-  // Lens moves and setting changes only need a redraw, not a re-snapshot.
-  useEffect(() => {
-    if (renderer === "webgl") drawGlass()
-  }, [renderer, lens, settings, drawGlass])
-
-  // Animate the bezel while a translation is in flight.
-  useEffect(() => {
-    if (renderer !== "webgl" || !busy) {
-      if (renderer === "webgl") drawGlass()
-      return
-    }
-    let id = 0
-    const loop = () => {
-      drawGlass()
-      id = requestAnimationFrame(loop)
-    }
-    loop()
-    return () => cancelAnimationFrame(id)
-  }, [renderer, busy, drawGlass])
-
   const onPointerMove = (e: React.PointerEvent) => {
     const rect = wrapRef.current!.getBoundingClientRect()
-    setLens({ x: e.clientX - rect.left - M, y: e.clientY - rect.top - M })
+    setLens({ x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
 
   const R = settings.size
   const m = settings.magnify
 
-  if (renderer !== "css") {
+  if (renderer === "canvas") {
     return (
-      <div
-        ref={wrapRef}
-        className={M ? "stage stage-free" : "stage"}
-        onPointerMove={onPointerMove}
-        style={{ width: PAGE_WIDTH + 2 * M, height: height + 2 * M, margin: `${-M}px 0 ${-M}px max(${-M}px, calc((100% - ${PAGE_WIDTH}px) / 2 - ${M}px))` }}
-      >
+      <div ref={wrapRef} className="stage" onPointerMove={onPointerMove} style={{ width: PAGE_WIDTH, height }}>
         <canvas
-          // A canvas holds one context type: remount when switching 2D <-> WebGL.
-          key={renderer}
           ref={canvasRef}
           className="stage-canvas"
-          // Both spellings: the shipped origin trial and the current explainer.
           {...{ layoutsubtree: "", content: "drawable" }}
-          style={{ width: PAGE_WIDTH + 2 * M, height: height + 2 * M }}
+          style={{ width: PAGE_WIDTH, height }}
         >
           <div ref={enRef} style={{ width: PAGE_WIDTH }} {...{ drawable: "" }}>
             <Page t={ENGLISH} lang="en" />

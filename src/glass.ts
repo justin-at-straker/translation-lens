@@ -1,13 +1,17 @@
-// WebGL loupe. Both pages are live DOM children of the canvas; on each paint
-// event they're uploaded as textures with texElementSubImage2D (HTML-in-Canvas),
-// then one full-screen shader draws the English page with the loupe on top.
+// WebGL scene renderer. The whole app is one full-window canvas whose drawable
+// children are uploaded as textures with texElementSubImage2D (HTML-in-Canvas):
+//  - "scene": the app itself (scrolling page + settings/chat panel) with a
+//    transparent background, so the shader draws the desk underneath
+//  - "tr": the translated page, a nested drawable (excluded from the scene's
+//    snapshot) sitting exactly over the English page
 //
-// Everything is lit by one point light (a lamp above the page), so highlights
-// slide and shadows stretch as the loupe moves:
+// One point light (a lamp above the desk) lights everything: the cards cast
+// shadows, highlights slide, and the loupe on top has
 //  - glass: a dome that refracts (bulge + dispersion) and reflects the room
 //  - bezel: a half-round brushed-steel ring with anisotropic highlights
-//  - handle: a knurled steel collar and a varnished walnut grip, as a capsule
-//  - shadows: projected from the lamp, with the lens's focused caustic
+//  - handle: a knurled steel collar and a varnished walnut grip
+// Inside the lens you see the translated page over the page, and a magnified
+// view of everything else (the panel, the desk).
 
 type GLWithElements = WebGL2RenderingContext & {
   texElementSubImage2D?: (target: number, level: number, x: number, y: number, el: Element) => void
@@ -22,11 +26,12 @@ export const webglSupported =
   typeof (WebGL2RenderingContext.prototype as GLWithElements).texElementSubImage2D === "function"
 
 export type GlassState = {
+  /** Lens centre, screen CSS px. */
   lens: { x: number; y: number }
-  /** Lamp position in page CSS px; z is its height above the page. */
+  /** Lamp position, screen CSS px; z is its height above the desk. */
   lamp: { x: number; y: number; z: number }
-  /** Desk margin around the page in CSS px; the canvas is this much larger on each side. */
-  margin: number
+  /** Where the translated page's top-left currently is on screen. */
+  trOrigin: { x: number; y: number }
   radius: number
   magnify: number
   refraction: boolean
@@ -40,45 +45,61 @@ void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 
 const FRAG = `#version 300 es
 precision highp float;
-uniform sampler2D uEn;
+uniform sampler2D uScene;
 uniform sampler2D uTr;
-uniform vec2 uRes;      // backing store px
+uniform vec2 uRes;        // backing store px
 uniform float uDpr;
-uniform vec2 uEnSize;   // CSS px
+uniform vec2 uSceneSize;  // CSS px
+uniform vec2 uTrOrigin;   // CSS px, screen
 uniform vec2 uTrSize;
-uniform vec2 uL;        // lens centre, CSS px
-uniform vec3 uLamp;     // lamp position, CSS px (z = height above the page)
+uniform vec2 uL;          // lens centre, CSS px
+uniform vec3 uLamp;       // lamp position, CSS px (z = height above the desk)
 uniform float uR, uM, uRefr, uTime, uBusy;
-uniform float uMargin;  // desk around the page, CSS px, so the loupe can overhang
 out vec4 outColor;
 
-const vec3 DESK = vec3(0.894, 0.882, 0.851);
-
-// Heights above the page, CSS px.
+// Heights above the desk, CSS px.
+const float Z_CARD = 18.0;
 const float Z_GLASS = 34.0;
 const float Z_HANDLE = 26.0;
 const vec3 V = vec3(0.0, 0.0, 1.0); // orthographic viewer, looking down
+const vec3 DESK = vec3(0.894, 0.882, 0.851);
 
-float sdBox(vec2 p, vec2 hs, float r) {
-  vec2 q = abs(p) - hs + r;
-  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+vec2 shadowOffset(vec2 at, float z) { return (at - uLamp.xy) * z / max(uLamp.z - z, 1.0); }
+
+// Gentle falloff away from the lamp, so the whole desk reads as lit.
+float lampLight(vec2 p) { return 1.05 - 0.15 * smoothstep(300.0, 2600.0, length(p - uLamp.xy)); }
+
+vec4 sceneAt(vec2 p) { return texture(uScene, p / uSceneSize); }
+
+// Soft shadow of the cards (page, panel), projected from the lamp, from the
+// scene's alpha.
+float cardShadow(vec2 p) {
+  vec2 q = p - shadowOffset(p, Z_CARD);
+  float s = sceneAt(q).a * 2.0;
+  float w = 2.0;
+  for (int i = 0; i < 12; i++) {
+    float a = float(i) * 0.5236;
+    s += sceneAt(q + vec2(cos(a), sin(a)) * 9.0).a;
+    s += sceneAt(q + vec2(cos(a + 0.26), sin(a + 0.26)) * 22.0).a * 0.6;
+    w += 1.6;
+  }
+  return s / w;
 }
 
-// The desk around the page, with the page's own soft shadow.
-vec3 desk(vec2 p) {
-  float sd = sdBox(p - uEnSize * 0.5 - vec2(0.0, 10.0), uEnSize * 0.5, 10.0);
-  return DESK * (1.0 - 0.14 * exp(-max(sd, 0.0) / 22.0));
+// What's on the desk at p: the app's cards over the shadowed desk.
+vec3 base(vec2 p) {
+  vec4 s = sceneAt(p);
+  vec3 desk = DESK * (1.0 - 0.18 * cardShadow(p));
+  return mix(desk, s.rgb, s.a) * lampLight(p);
 }
 
-// A page sampled at p (page CSS px), or the desk when p is off the page.
-vec3 onPage(sampler2D tex, vec2 size, vec2 p) {
-  float sd = sdBox(p - uEnSize * 0.5, uEnSize * 0.5, 10.0);
-  vec3 c = texture(tex, clamp(p / size, 0.0, 1.0)).rgb;
-  return mix(c, desk(p), smoothstep(-0.5, 0.5, sd));
+// What the lens sees at q: the translated page where the page is, else the scene.
+vec3 lensView(vec2 q) {
+  vec2 t = q - uTrOrigin;
+  if (t.x >= 0.0 && t.y >= 0.0 && t.x < uTrSize.x && t.y < uTrSize.y)
+    return texture(uTr, t / uTrSize).rgb * lampLight(q);
+  return base(q);
 }
-
-vec3 en(vec2 p) { return onPage(uEn, uEnSize, p); }
-vec3 tr(vec2 p) { return onPage(uTr, uTrSize, p); }
 
 float sdSeg(vec2 p, vec2 a, vec2 b, out float h) {
   vec2 pa = p - a, ba = b - a;
@@ -102,9 +123,6 @@ vec3 env(vec3 r, vec3 l) {
 
 float fresnel(float cosT, float f0) { return f0 + (1.0 - f0) * pow(1.0 - cosT, 5.0); }
 
-// Where a point at height z casts its shadow, relative to the point.
-vec2 shadowOffset(vec2 at, float z) { return (at - uLamp.xy) * z / max(uLamp.z - z, 1.0); }
-
 // Brushed metal: environment reflection plus a highlight stretched across
 // the brushing direction T.
 vec3 brushedMetal(vec3 n, vec3 T, vec3 l, vec3 tint, float brush) {
@@ -119,24 +137,21 @@ vec3 brushedMetal(vec3 n, vec3 T, vec3 l, vec3 tint, float brush) {
 }
 
 void main() {
-  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr - uMargin;
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr;
   vec2 d = p - uL;
   float dist = length(d);
   float aa = 0.8;
   float bw = max(10.0, uR * 0.09);   // bezel width
   float ro = uR + bw;
-  vec3 col = en(p);
+  vec3 col = base(p);
 
-  // ---- Shadows on the page, projected from the lamp ----
+  // ---- The loupe's shadows, projected from the lamp ----
   vec2 sc = uL + shadowOffset(uL, Z_GLASS);
   float sdl = length(p - sc);
   float blur = 6.0 + Z_GLASS * 0.5;
-  // Bezel ring: a solid occluder.
   float ring = 1.0 - smoothstep(0.0, blur, abs(sdl - (uR + bw * 0.5)) - bw * 0.5);
-  // Glass: lets most light through, focuses some into a caustic.
   float inside = 1.0 - smoothstep(uR - blur, uR + blur * 0.3, sdl);
   float caustic = exp(-pow(sdl / (uR * 0.2), 2.0)) + 0.35 * exp(-pow((sdl - uR * 0.55) / (uR * 0.07), 2.0));
-  // Soft contact shadow under the whole loupe.
   float ao = 1.0 - smoothstep(-uR * 0.1, uR * 0.6, sdl - ro);
 
   vec2 dir = normalize(vec2(1.0, 1.0));
@@ -167,7 +182,6 @@ void main() {
     vec3 axis = vec3(dir, 0.0);
     vec3 hc;
     if (along < 34.0) {
-      // Knurled collar: ridges tilt the normal along the axis.
       float ridge = sin(along * 2.4);
       vec3 nk = normalize(n + axis * ridge * 0.35);
       float groove = smoothstep(0.0, 1.5, abs(along - 4.0) - 1.0) * smoothstep(0.0, 1.5, abs(along - 30.0) - 1.0);
@@ -179,13 +193,11 @@ void main() {
       float diff = max(dot(n, l), 0.0);
       float amb = 0.18 + 0.12 * n.z;
       hc = wood * (diff * 0.95 + amb);
-      // Varnish: a clear coat that reflects the room, strongest at grazing angles.
       vec3 r = reflect(-V, n);
       float f = fresnel(max(n.z, 0.0), 0.05);
       hc += env(r, l) * f * 0.55;
       hc += pow(max(dot(n, normalize(l + V)), 0.0), 120.0) * 0.8;
     }
-    // Occlusion where the collar meets the bezel.
     hc *= mix(0.55, 1.0, smoothstep(0.0, 14.0, along));
     col = mix(col, hc, 1.0 - smoothstep(-aa, aa, hd));
   }
@@ -201,9 +213,8 @@ void main() {
     vec3 l = toLamp(P);
     float ang = atan(d.y, d.x);
     float brush = 0.5 + 0.5 * sin(ang * 70.0 + sin(ang * 11.0) * 3.0);
-    vec3 T = vec3(-rd.y, rd.x, 0.0); // brushed around the ring
+    vec3 T = vec3(-rd.y, rd.x, 0.0);
     vec3 steel = brushedMetal(n, T, l, vec3(0.74, 0.75, 0.78), brush);
-    // Seams at the inner and outer edges.
     steel *= 0.6 + 0.4 * smoothstep(0.0, 0.14, rt) * smoothstep(1.0, 0.86, rt);
     if (uBusy > 0.5) {
       float s = fract(ang / 6.28318 - uTime * 0.6);
@@ -217,18 +228,15 @@ void main() {
   if (dist < uR + aa) {
     float r = clamp(dist / uR, 0.0, 1.0);
     float h = sqrt(max(0.0, 1.0 - r * r));
-    // Barrel bulge: towards the rim, sample closer to the centre.
     float bulge = uRefr * 0.26 * pow(1.0 - h, 1.5);
     float sc2 = (1.0 / uM) * (1.0 - bulge);
     float ca = uRefr * 0.012 * pow(1.0 - h, 1.3);
     vec3 g;
-    g.r = tr(uL + d * sc2 * (1.0 + ca)).r;
-    g.g = tr(uL + d * sc2).g;
-    g.b = tr(uL + d * sc2 * (1.0 - ca)).b;
-    // Thickness tint at the edge, like the green of real glass.
+    g.r = lensView(uL + d * sc2 * (1.0 + ca)).r;
+    g.g = lensView(uL + d * sc2).g;
+    g.b = lensView(uL + d * sc2 * (1.0 - ca)).b;
     g *= mix(vec3(1.0), vec3(0.88, 0.96, 0.95), pow(1.0 - h, 1.6));
 
-    // A shallow dome: reflects the room, more at the rim (fresnel).
     vec3 n = normalize(vec3(d / uR * 0.55, h + 0.25));
     vec3 P = vec3(p, Z_GLASS + h * 10.0);
     vec3 l = toLamp(P);
@@ -236,8 +244,6 @@ void main() {
     float f = fresnel(max(n.z, 0.0), 0.04);
     g = mix(g, env(rr, l), clamp(f, 0.0, 1.0) * 0.65);
 
-    // The bezel shades the glass on the side away from the lamp, and the lit
-    // side picks up a thin bright edge.
     vec2 ld = normalize(uLamp.xy - uL);
     float away = 0.5 + 0.5 * dot(normalize(d + 1e-4), -ld);
     g *= 1.0 - 0.22 * smoothstep(0.8, 1.0, r) * away;
@@ -259,15 +265,20 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string) {
   return s
 }
 
-const UNIFORMS = ["uEn", "uTr", "uRes", "uDpr", "uEnSize", "uTrSize", "uL", "uLamp", "uR", "uM", "uRefr", "uTime", "uBusy", "uMargin"]
+const UNIFORMS = [
+  "uScene", "uTr", "uRes", "uDpr", "uSceneSize", "uTrOrigin", "uTrSize",
+  "uL", "uLamp", "uR", "uM", "uRefr", "uTime", "uBusy",
+]
+
+type Slot = "scene" | "tr"
 
 export class GlassRenderer {
   private gl: GLWithElements
   private prog: WebGLProgram
-  private tex: { en: WebGLTexture; tr: WebGLTexture }
-  private texSize = { en: [0, 0], tr: [0, 0] }
-  /** CSS size of each page when its texture was captured, so sampling matches the texture. */
-  private cssSize = { en: [1, 1], tr: [1, 1] }
+  private tex: Record<Slot, WebGLTexture>
+  private texSize: Record<Slot, [number, number]> = { scene: [0, 0], tr: [0, 0] }
+  /** CSS size of each element when its texture was captured, so sampling matches the texture. */
+  private cssSize: Record<Slot, [number, number]> = { scene: [1, 1], tr: [1, 1] }
   private u: Record<string, WebGLUniformLocation | null> = {}
   private canvas: DrawableCanvas
 
@@ -292,9 +303,13 @@ export class GlassRenderer {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
 
     for (const name of UNIFORMS) this.u[name] = gl.getUniformLocation(prog, name)
-    this.tex = { en: this.makeTexture(), tr: this.makeTexture() }
-    gl.uniform1i(this.u.uEn, 0)
+    this.tex = { scene: this.makeTexture(), tr: this.makeTexture() }
+    gl.uniform1i(this.u.uScene, 0)
     gl.uniform1i(this.u.uTr, 1)
+  }
+
+  private unit(slot: Slot) {
+    return slot === "scene" ? this.gl.TEXTURE0 : this.gl.TEXTURE1
   }
 
   private makeTexture() {
@@ -309,30 +324,25 @@ export class GlassRenderer {
   }
 
   /**
-   * Snapshot a drawable child into its texture. Returns false if the snapshot
-   * isn't ready, in which case the previous texture is kept so we never draw
-   * a blank (black) page.
-   *
-   * When the element's size changes (a new translation re-aligns the blocks),
-   * the upload goes into a fresh texture that only replaces the old one once
-   * the copy succeeds: reallocating in place would blank the old texture, and
-   * the snapshot can lag a frame behind the new layout.
+   * Snapshot a drawable element into its texture. Returns false if the
+   * snapshot isn't ready, in which case the previous texture is kept so we
+   * never draw a blank (black) frame. On a size change the copy goes into a
+   * fresh texture that only replaces the old one once it succeeds.
    */
-  upload(which: "en" | "tr", el: HTMLElement): boolean {
+  upload(slot: Slot, el: HTMLElement): boolean {
     const gl = this.gl
     const size = this.canvas.getElementImageDefaultSize?.(el) ?? {
       width: el.offsetWidth * devicePixelRatio,
       height: el.offsetHeight * devicePixelRatio,
     }
-    // The snapshot size is fractional at non-integer display scales (e.g.
-    // 249.75 x 105.7 at 125%). Rounding down makes the texture a pixel too
-    // small and the copy fails with INVALID_VALUE, so always round up.
+    // Fractional at non-integer display scales (e.g. 249.75 at 125%):
+    // rounding down makes the copy fail with INVALID_VALUE, so round up.
     const w = Math.max(1, Math.ceil(size.width))
     const h = Math.max(1, Math.ceil(size.height))
-    gl.activeTexture(which === "en" ? gl.TEXTURE0 : gl.TEXTURE1)
-    const [cw, ch] = this.texSize[which]
+    gl.activeTexture(this.unit(slot))
+    const [cw, ch] = this.texSize[slot]
     const resize = cw !== w || ch !== h
-    const target = resize ? this.makeTexture() : this.tex[which]
+    const target = resize ? this.makeTexture() : this.tex[slot]
     gl.bindTexture(gl.TEXTURE_2D, target)
     if (resize) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
     while (gl.getError() !== gl.NO_ERROR) {
@@ -347,21 +357,21 @@ export class GlassRenderer {
     }
     if (resize) {
       if (ok) {
-        gl.deleteTexture(this.tex[which])
-        this.tex[which] = target
-        this.texSize[which] = [w, h]
+        gl.deleteTexture(this.tex[slot])
+        this.tex[slot] = target
+        this.texSize[slot] = [w, h]
       } else {
         gl.deleteTexture(target)
       }
     }
-    if (ok) this.cssSize[which] = [el.offsetWidth, el.offsetHeight]
-    gl.bindTexture(gl.TEXTURE_2D, this.tex[which])
+    if (ok) this.cssSize[slot] = [el.offsetWidth, el.offsetHeight]
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[slot])
     return ok
   }
 
-  /** True once both pages have been captured at least once. */
+  /** True once both elements have been captured at least once. */
   get ready() {
-    return this.texSize.en[0] > 0 && this.texSize.tr[0] > 0
+    return this.texSize.scene[0] > 0 && this.texSize.tr[0] > 0
   }
 
   draw(s: GlassState) {
@@ -370,15 +380,15 @@ export class GlassRenderer {
     gl.viewport(0, 0, c.width, c.height)
     gl.useProgram(this.prog)
     gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, this.tex.en)
+    gl.bindTexture(gl.TEXTURE_2D, this.tex.scene)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, this.tex.tr)
     gl.uniform2f(this.u.uRes, c.width, c.height)
     gl.uniform1f(this.u.uDpr, c.width / c.clientWidth || devicePixelRatio)
-    gl.uniform2f(this.u.uEnSize, this.cssSize.en[0], this.cssSize.en[1])
+    gl.uniform2f(this.u.uSceneSize, this.cssSize.scene[0], this.cssSize.scene[1])
     gl.uniform2f(this.u.uTrSize, this.cssSize.tr[0], this.cssSize.tr[1])
+    gl.uniform2f(this.u.uTrOrigin, s.trOrigin.x, s.trOrigin.y)
     gl.uniform2f(this.u.uL, s.lens.x, s.lens.y)
-    gl.uniform1f(this.u.uMargin, s.margin)
     gl.uniform3f(this.u.uLamp, s.lamp.x, s.lamp.y, s.lamp.z)
     gl.uniform1f(this.u.uR, s.radius)
     gl.uniform1f(this.u.uM, s.magnify)
@@ -390,7 +400,7 @@ export class GlassRenderer {
 
   dispose() {
     const gl = this.gl
-    gl.deleteTexture(this.tex.en)
+    gl.deleteTexture(this.tex.scene)
     gl.deleteTexture(this.tex.tr)
     gl.deleteProgram(this.prog)
   }

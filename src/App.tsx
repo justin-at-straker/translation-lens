@@ -6,6 +6,7 @@ import { ENGLISH, type Translations } from "./content"
 import { webglSupported } from "./glass"
 import { canvasSupported, LensStage, type Renderer } from "./LensStage"
 import { Panel } from "./Panel"
+import { Scene } from "./Scene"
 import { DEFAULT_SETTINGS, LANGUAGES, translationKey, type LensSettings } from "./settings"
 
 const RENDERER_LABELS: Record<Renderer, string> = {
@@ -74,27 +75,40 @@ export function App() {
   ]
   const renderer = available[rendererIndex % available.length]
 
+  const sidebar = (
+    <>
+      <Panel settings={settings} onChange={onChange} />
+      <Chat apiKey={apiKey} onKey={onKey} />
+      <div className="status" data-agent-hidden>
+        <span className={`badge ${renderer === "css" ? "css" : "canvas"}`}>{RENDERER_LABELS[renderer]}</span>
+        {available.length > 1 ? (
+          <button className="link" onClick={() => setRendererIndex((i) => i + 1)}>
+            Switch to {RENDERER_LABELS[available[(rendererIndex + 1) % available.length]]}
+          </button>
+        ) : (
+          <span className="muted">Enable chrome://flags/#canvas-draw-element for the canvas renderer</span>
+        )}
+        {busy && <span className="muted">Translating…</span>}
+        {note && <span className="warn">{note}</span>}
+      </div>
+    </>
+  )
+
+  // WebGL: the whole app, controls included, is one HTML-in-Canvas scene.
+  if (renderer === "webgl") {
+    return (
+      <Scene translated={shown.t} lang={shown.lang} settings={settings} busy={busy}>
+        {sidebar}
+      </Scene>
+    )
+  }
+
   return (
     <div className="app">
       <main className="viewport">
         <LensStage translated={shown.t} lang={shown.lang} settings={settings} busy={busy} renderer={renderer} />
       </main>
-      <aside className="sidebar">
-        <Panel settings={settings} onChange={onChange} />
-        <Chat apiKey={apiKey} onKey={onKey} />
-        <div className="status" data-agent-hidden>
-          <span className={`badge ${renderer === "css" ? "css" : "canvas"}`}>{RENDERER_LABELS[renderer]}</span>
-          {available.length > 1 ? (
-            <button className="link" onClick={() => setRendererIndex((i) => i + 1)}>
-              Switch to {RENDERER_LABELS[available[(rendererIndex + 1) % available.length]]}
-            </button>
-          ) : (
-            <span className="muted">Enable chrome://flags/#canvas-draw-element for the canvas renderer</span>
-          )}
-          {busy && <span className="muted">Translating…</span>}
-          {note && <span className="warn">{note}</span>}
-        </div>
-      </aside>
+      <aside className="sidebar">{sidebar}</aside>
     </div>
   )
 }
