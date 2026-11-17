@@ -2,6 +2,10 @@
 
 A magnifying glass you move over a web page. Under the glass, the page is translated.
 
+**Live:** https://translation-lens-six.vercel.app
+
+![The loupe over the demo page, showing the English paragraph in French (Canada)](docs/screenshot.png)
+
 It's an experiment with three newer browser APIs:
 
 - **HTML-in-Canvas.** The whole app (the page, the settings panel, the chat) is real DOM drawn into one WebGL canvas with `texElementSubImage2D`. The DOM is still live, so clicks, focus, scrolling and screen readers keep working. The translated page is a second drawable layer, and only the part under the lens takes clicks.
