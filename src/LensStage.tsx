@@ -1,11 +1,14 @@
-// The page with a translation lens over it. Two renderers:
-//  - "canvas": HTML-in-Canvas. Both pages are live DOM children of a drawable
+// The page with a translation lens over it. Three renderers:
+//  - "webgl": HTML-in-Canvas into WebGL textures, drawn by the glass shader in
+//    glass.ts (real refraction, steel bezel, wooden handle).
+//  - "canvas": HTML-in-Canvas 2D. Both pages are live DOM children of a drawable
 //    canvas; each frame draws the English page, then the translated page
 //    through a circular clip with magnified rim bands (fake refraction) and a
 //    glass rim. Text under the lens stays hit-testable via element geometry.
 //  - "css": fallback for browsers without the API. Same idea with clip-path.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ENGLISH, type Translations } from "./content"
+import { GlassRenderer } from "./glass"
 import { Page } from "./Page"
 import type { LensSettings } from "./settings"
 
@@ -17,8 +20,10 @@ type Canvas2D = CanvasRenderingContext2D & {
 type DrawableCanvas = HTMLCanvasElement & {
   requestPaint?: () => void
   onpaint?: (() => void) | null
-  updateElementGeometry?: (el: Element, opts: { canvasClip?: DOMRectInit }) => void
+  updateElementGeometry?: (el: Element, opts: { canvasClip?: DOMRectInit; canvasTransform?: DOMMatrixInit }) => void
 }
+
+export type Renderer = "webgl" | "canvas" | "css"
 
 export const canvasSupported =
   typeof window !== "undefined" &&
@@ -29,7 +34,7 @@ type Props = {
   lang: string
   settings: LensSettings
   busy: boolean
-  renderer: "canvas" | "css"
+  renderer: Renderer
 }
 
 /** Give each pair of matching blocks the taller of the two heights, so the
@@ -217,6 +222,89 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
     else paint()
   }, [renderer, lens, settings, busy, translated, paint])
 
+  // ---- WebGL glass renderer ---------------------------------------------
+  const glassRef = useRef<GlassRenderer | null>(null)
+
+  const drawGlass = useCallback(() => {
+    const g = glassRef.current
+    const canvas = canvasRef.current
+    const en = enRef.current
+    const tr = trRef.current
+    if (!g || !canvas || !en || !tr) return
+    const { lens: L, settings: s, busy: b } = stateRef.current
+    g.draw({ lens: L, radius: s.size, magnify: s.magnify, refraction: s.refraction, busy: b }, en, tr)
+    // WebGL can't infer where elements were drawn, so tell the canvas: the
+    // English page sits as-is; the translated page is scaled about the lens
+    // centre and only takes clicks inside the lens.
+    const m = s.magnify
+    const R = s.size
+    try {
+      canvas.updateElementGeometry?.(en, { canvasTransform: new DOMMatrix() })
+      canvas.updateElementGeometry?.(tr, {
+        canvasTransform: new DOMMatrix([m, 0, 0, m, L.x * (1 - m), L.y * (1 - m)]),
+        canvasClip: { x: L.x - R / m, y: L.y - R / m, width: (2 * R) / m, height: (2 * R) / m },
+      })
+    } catch {
+      tr.style.pointerEvents = "none"
+    }
+  }, [])
+
+  useEffect(() => {
+    if (renderer !== "webgl") return
+    const canvas = canvasRef.current
+    const en = enRef.current
+    const tr = trRef.current
+    if (!canvas || !en || !tr) return
+    let g: GlassRenderer
+    try {
+      g = new GlassRenderer(canvas)
+    } catch (e) {
+      console.error(e)
+      return
+    }
+    glassRef.current = g
+    // The paint event fires when either page's rendering changes: re-snapshot both.
+    canvas.onpaint = () => {
+      if (g.upload("en", en) && g.upload("tr", tr)) drawGlass()
+    }
+    canvas.requestPaint?.()
+    return () => {
+      canvas.onpaint = null
+      g.dispose()
+      glassRef.current = null
+    }
+  }, [renderer, drawGlass])
+
+  useEffect(() => {
+    if (renderer !== "webgl") return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(PAGE_WIDTH * dpr)
+    canvas.height = Math.round(height * dpr)
+    canvas.requestPaint?.()
+  }, [renderer, height])
+
+  // Lens moves and setting changes only need a redraw, not a re-snapshot.
+  useEffect(() => {
+    if (renderer === "webgl") drawGlass()
+  }, [renderer, lens, settings, drawGlass])
+
+  // Animate the bezel while a translation is in flight.
+  useEffect(() => {
+    if (renderer !== "webgl" || !busy) {
+      if (renderer === "webgl") drawGlass()
+      return
+    }
+    let id = 0
+    const loop = () => {
+      drawGlass()
+      id = requestAnimationFrame(loop)
+    }
+    loop()
+    return () => cancelAnimationFrame(id)
+  }, [renderer, busy, drawGlass])
+
   const onPointerMove = (e: React.PointerEvent) => {
     const rect = wrapRef.current!.getBoundingClientRect()
     setLens({ x: e.clientX - rect.left, y: e.clientY - rect.top })
@@ -225,10 +313,12 @@ export function LensStage({ translated, lang, settings, busy, renderer }: Props)
   const R = settings.size
   const m = settings.magnify
 
-  if (renderer === "canvas") {
+  if (renderer !== "css") {
     return (
       <div ref={wrapRef} className="stage" onPointerMove={onPointerMove} style={{ width: PAGE_WIDTH, height }}>
         <canvas
+          // A canvas holds one context type: remount when switching 2D <-> WebGL.
+          key={renderer}
           ref={canvasRef}
           className="stage-canvas"
           // Both spellings: the shipped origin trial and the current explainer.
